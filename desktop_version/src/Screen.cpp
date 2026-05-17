@@ -19,6 +19,7 @@
 #include "Map.h"
 #include "Render.h"
 #include "Vlogging.h"
+#include "TouchInput.h"
 
 void ScreenSettings_default(struct ScreenSettings* _this)
 {
@@ -282,6 +283,13 @@ void Screen::GetScreenSize(int* x, int* y)
 
 void Screen::RenderPresent(void)
 {
+
+#ifdef __ANDROID__
+    int touchW, touchH;
+    SDL_GetRendererOutputSize(m_renderer, &touchW, &touchH);
+    TouchInput_Render(m_renderer, touchW, touchH);
+#endif
+
     SDL_RenderPresent(m_renderer);
     graphics.clear();
 }

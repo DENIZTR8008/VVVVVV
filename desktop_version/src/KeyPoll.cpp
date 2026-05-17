@@ -20,6 +20,7 @@
 #include "UTF8.h"
 #include "UtilityClass.h"
 #include "Vlogging.h"
+#include "TouchInput.h"
 
 bool SaveScreenshot(void);
 
@@ -233,6 +234,15 @@ void KeyPoll::Poll(void)
     bool should_recompute_textboxes = false;
     bool active_input_device_changed = false;
     bool keyboard_was_active = BUTTONGLYPHS_keyboard_is_active();
+
+    // Initialize touch input on first call
+    static bool touchInit = false;
+    if (!touchInit)
+    {
+        TouchInput_Init();
+        touchInit = true;
+    }
+
     while (SDL_PollEvent(&evt))
     {
         switch (evt.type)
@@ -246,6 +256,13 @@ void KeyPoll::Poll(void)
             {
                 pressedbackspace = true;
             }
+
+#ifdef __ANDROID__
+        int touchW, touchH;
+        SDL_GetRendererOutputSize(SDL_GetRenderer(SDL_GL_GetCurrentWindow()), &touchW, &touchH);
+        TouchInput_HandleEvent(evt, touchW, touchH);
+#endif
+
 
 #ifdef __APPLE__ /* OSX prefers the command keys over the alt keys. -flibit */
             altpressed = keymap[SDLK_LGUI] || keymap[SDLK_RGUI];
