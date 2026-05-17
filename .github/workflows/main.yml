@@ -1,0 +1,101 @@
+name: Build VVVVVV Android APK
+
+on:
+  workflow_dispatch:  # Запуск вручную из вкладки Actions
+  push:
+    branches: [master, main]
+    paths:
+      - "desktop_version/**"
+      - ".github/workflows/android-build.yml"
+  pull_request:
+    branches: [master, main]
+
+env:
+  SDL_VERSION: release-2.30.8
+  SRC_DIR: VVVVVV/desktop_version/VVVVVV-android
+
+jobs:
+  build:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Checkout VVVVVV с submodules
+      - name: Checkout VVVVVV
+        uses: actions/checkout@v4
+        with:
+          repository: TerryCavanagh/VVVVVV
+          submodules: recursive
+          path: VVVVVV
+
+      # 2. Checkout SDL2
+      - name: Checkout SDL2
+        uses: actions/checkout@v4
+        with:
+          repository: libsdl-org/SDL
+          ref: ${{ env.SDL_VERSION }}
+          path: SDL
+
+      # 3. Установка зависимостей
+      - name: Setup Java & dependencies
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Install ninja-build
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      # 4. Сборка SDL2 Android Prefab AAR
+      - name: Build SDL2 Prefab
+        run: |
+          cd SDL
+          ./build-scripts/android-prefab.sh
+          
+          # Устанавливаем в Maven Local
+          mvn install:install-file \
+            -Dfile=build-android-prefab/prefab-2.30.8/SDL2-2.30.8.aar \
+            -DpomFile=build-android-prefab/prefab-2.30.8/SDL2-2.30.8.pom
+
+      # 5. Проверка data.zip (опционально, но полезно)
+      - name: Check for data.zip
+        run: |
+          if [ -f "${{ env.SRC_DIR }}/app/src/main/assets/data.zip" ]; then
+            echo "✅ data.zip found"
+            echo "HAS_DATA=true" >> $GITHUB_ENV
+          else
+            echo "⚠️ data.zip NOT found. APK will build but game assets will be missing."
+            echo "Place data.zip in: desktop_version/VVVVVV-android/app/src/main/assets/"
+            echo "HAS_DATA=false" >> $GITHUB_ENV
+          fi
+
+      # 6. Сборка APK через Gradle
+      - name: Build APK
+        run: |
+          cd ${{ env.SRC_DIR }}
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      # 7. Сохранение APK как артефакта (скачать из Actions → Summary)
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VVVVVV-Android-APK
+          path: |
+            ${{ env.SRC_DIR }}/app/build/outputs/apk/debug/*.apk
+            ${{ env.SRC_DIR }}/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+      # 8. (Опционально) Создание Release с APK
+      - name: Upload to Release
+        if: github.event_name == 'workflow_dispatch' && env.HAS_DATA == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ env.SRC_DIR }}/app/build/outputs/apk/**/*.apk
+          tag_name: android-build-${{ github.run_number }}
+          draft: true
+          body: |
+            Сборка VVVVVV для Android
+            ⚠️ Для личного использования. data.zip не включён в соответствии с лицензией.
