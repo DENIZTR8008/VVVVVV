@@ -4,6 +4,7 @@ name: CI (Android)
 # This includes C/C++ files that have __ANDROID__ ifdefs.
 # If adding new ifdefs, make sure to update these lists.
 on:
+  workflow_dispatch:
   push:
     paths:
       - "desktop_version/CMakeLists.txt"
@@ -11,6 +12,9 @@ on:
       - "desktop_version/src/FileSystemUtils.cpp"
       - "desktop_version/src/Screen.cpp"
       - "desktop_version/src/Vlogging.c"
+      - "desktop_version/src/TouchInput.cpp"
+      - "desktop_version/src/TouchInput.h"
+      - "desktop_version/src/KeyPoll.cpp"
       - "desktop_version/VVVVVV-android/gradlew"
       - "desktop_version/VVVVVV-android/gradlew.bat"
       - "desktop_version/VVVVVV-android/**/CMakeLists.txt"
@@ -29,6 +33,9 @@ on:
       - "desktop_version/src/FileSystemUtils.cpp"
       - "desktop_version/src/Screen.cpp"
       - "desktop_version/src/Vlogging.c"
+      - "desktop_version/src/TouchInput.cpp"
+      - "desktop_version/src/TouchInput.h"
+      - "desktop_version/src/KeyPoll.cpp"
       - "desktop_version/VVVVVV-android/gradlew"
       - "desktop_version/VVVVVV-android/gradlew.bat"
       - "desktop_version/VVVVVV-android/**/CMakeLists.txt"
@@ -46,7 +53,7 @@ env:
 
 jobs:
   build:
-    name: Build (Android)
+    name: Build Universal APK
 
     runs-on: ubuntu-latest
 
@@ -75,7 +82,16 @@ jobs:
         ./build-scripts/android-prefab.sh
         mvn install:install-file -Dfile=build-android-prefab/prefab-2.30.8/SDL2-2.30.8.aar -DpomFile=build-android-prefab/prefab-2.30.8/SDL2-2.30.8.pom
 
-    - name: Build
+    - name: Build Universal APK
       run: |
         cd ${SRC_DIR_PATH}
-        ./gradlew build
+        ./gradlew assembleDebug
+
+    - name: Upload APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: VVVVVV-Universal-APK
+        path: |
+          ${SRC_DIR_PATH}/app/build/outputs/apk/debug/*.apk
+        if-no-files-found: error
+        retention-days: 30
