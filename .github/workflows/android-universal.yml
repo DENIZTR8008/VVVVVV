@@ -1,0 +1,75 @@
+name: Build VVVVVV Android Universal APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master, main]
+    paths:
+      - "desktop_version/**"
+      - ".github/workflows/android-universal.yml"
+
+env:
+  SDL_VERSION: release-2.30.8
+
+jobs:
+  build:
+    name: Build Universal APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout VVVVVV
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build
+
+      - name: Checkout SDL2
+        uses: actions/checkout@v4
+        with:
+          repository: libsdl-org/SDL
+          ref: ${{ env.SDL_VERSION }}
+          path: SDL
+
+      - name: Build SDL2 Prefab
+        run: |
+          cd SDL
+          ./build-scripts/android-prefab.sh
+          mvn install:install-file             -Dfile=build-android-prefab/prefab-2.30.8/SDL2-2.30.8.aar             -DpomFile=build-android-prefab/prefab-2.30.8/SDL2-2.30.8.pom
+
+      - name: Build Universal APK
+        run: |
+          cd desktop_version/VVVVVV-android
+          chmod +x gradlew
+          # Собираем universal APK (все ABI в одном файле)
+          ./gradlew assembleDebug
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VVVVVV-Universal-APK
+          path: |
+            desktop_version/VVVVVV-android/app/build/outputs/apk/debug/*.apk
+            desktop_version/VVVVVV-android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Upload to Release (optional)
+        if: github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v1
+        with:
+          files: desktop_version/VVVVVV-android/app/build/outputs/apk/**/*.apk
+          tag_name: v2.5-android-universal-${{ github.run_number }}
+          draft: true
+          generate_release_notes: true
+          
