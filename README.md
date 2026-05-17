@@ -1,23 +1,17 @@
-![logo](logo.gif "VVVVVV")
+# VVVVVV Android Touch Controls v2 — Пропатченные файлы
 
-This is the source code to VVVVVV, the 2010 indie game by [Terry Cavanagh](http://distractionware.com/), with music by [Magnus Pålsson](http://souleye.madtracker.net/). You can read the [announcement](http://distractionware.com/blog/2020/01/vvvvvv-is-now-open-source/) of the source code release on Terry's blog!
+ИСПРАВЛЕНА ПРОБЛЕМА: теперь используется SDL_PushEvent вместо SDL_SendKeyboardKey.
+KeyPoll::Poll() корректно обрабатывает touch через стандартную SDL очередь событий.
 
-The source code for the desktop version is in [this folder](desktop_version).
+## Быстрая установка
 
-VVVVVV is still commercially available at [thelettervsixtim.es](https://thelettervsixtim.es/) if you'd like to support it, but you are completely free to compile the game for your own personal use. If you're interested in distributing a compiled version of the game, see [LICENSE.md](LICENSE.md) for more information.
+1. Распакуй ZIP поверх своего форка VVVVVV (с заменой файлов)
+2. GitHub Desktop → Commit → Push
+3. data.zip в desktop_version/VVVVVV-android/app/src/main/assets/
+4. Собери: ./gradlew assembleDebug
 
-Discussion about VVVVVV updates mainly happens on the "unofficial" [VVVVVV discord](https://discord.gg/Zf7Nzea), in the `vvvvvv-code` channel.
-
-Credits
--------
-- Created by [Terry Cavanagh](http://distractionware.com/)
-- Room Names by [Bennett Foddy](http://www.foddy.net)
-- Music by [Magnus Pålsson](https://magnuspalsson.com/)
-- Metal Soundtrack by [FamilyJules](https://link.space/@familyjules)
-- 2.0 Update (C++ Port) by [Simon Roth](http://www.machinestudios.co.uk)
-- 2.2 Update (SDL2/PhysicsFS/Steamworks port) by [Ethan Lee](http://www.flibitijibibo.com/)
-- Additional coding by [Misa Kai](https://infoteddy.info/)
-- Beta Testing by Sam Kaplan and Pauli Kohberger
-- Ending Picture by Pauli Kohberger
-- Localisations by [our localisation teams](desktop_version/TRANSLATORS.txt)
-- With additional contributions by [many others here on github](desktop_version/CONTRIBUTORS.txt) <3
+## Кнопки
+- [ < ] влево (SDLK_LEFT)
+- [ > ] вправо (SDLK_RIGHT)
+- [FLIP] флип (SDLK_SPACE)
+- [MAP] карта (SDLK_m)

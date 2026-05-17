@@ -258,9 +258,7 @@ void KeyPoll::Poll(void)
             }
 
 #ifdef __ANDROID__
-        int touchW, touchH;
-        SDL_GetRendererOutputSize(SDL_GetRenderer(SDL_GL_GetCurrentWindow()), &touchW, &touchH);
-        TouchInput_HandleEvent(evt, touchW, touchH);
+        TouchInput_HandleEvent(evt, 0, 0);
 #endif
 
 
