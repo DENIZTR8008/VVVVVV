@@ -44,6 +44,12 @@ endif()
 
 project(VVVVVV)
 
+# Android touch controls
+if(ANDROID)
+    add_compile_definitions(__ANDROID__)
+endif()
+
+
 if(APPLE)
     message(STATUS "Using macOS SDK at ${CMAKE_OSX_SYSROOT}")
 endif()
