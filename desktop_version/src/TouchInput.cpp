@@ -1,29 +1,35 @@
 #include "TouchInput.h"
 #include <SDL.h>
-#include <cstring>
+#include <map>
 
-struct TouchZone {
-    float x, y, w, h;
-    SDL_Keycode keycode;    // SDL_Keycode для keymap
-    bool active;
-    SDL_FingerID fingerId;
-    Uint8 r, g, b;
-};
+// Зональное управление как в VVVVVV-CE
+// Левая половина: LEFT/RIGHT (зависит от текущего движения)
+// Правая половина: FLIP (V)
+// Верхний левый угол: ENTER (действие/меню)
+// Верхний правый угол: ESCAPE (назад/меню)
 
-static TouchZone zones[] = {
-    { 0.04f, 0.70f, 0.18f, 0.24f, SDLK_LEFT,  false, 0, 200, 200, 255 },
-    { 0.24f, 0.70f, 0.18f, 0.24f, SDLK_RIGHT, false, 0, 200, 200, 255 },
-    { 0.58f, 0.70f, 0.18f, 0.24f, SDLK_SPACE, false, 0, 255, 200, 100 },
-    { 0.78f, 0.70f, 0.18f, 0.24f, SDLK_m,     false, 0, 150, 255, 150 },
-};
+static std::map<SDL_FingerID, SDL_Keycode> finger_buttons;
+static float orig_x = 0.0f;
+static int delayed_left_time = -10;
+static int delayed_right_time = -10;
 
-static const int NUM_ZONES = sizeof(zones) / sizeof(zones[0]);
+// Для эмуляции fakekey (Enter/Escape)
+static SDL_Keycode fakekey = SDLK_UNKNOWN;
+static int fakekeytimer = -1;
 
 void TouchInput_Init(void) {
-    // zones инициализированы статически
+    finger_buttons.clear();
+    delayed_left_time = -10;
+    delayed_right_time = -10;
+    fakekey = SDLK_UNKNOWN;
+    fakekeytimer = -1;
 }
 
-// Пушим SDL событие в очередь, чтобы KeyPoll::Poll() его обработал
+// Прямое обновление keymap (как в CE)
+// Нужен доступ к keymap из KeyPoll — будем использовать SDL_PushEvent
+// Но правильнее — модифицировать KeyPoll.h чтобы keymap был доступен
+// Пока используем SDL_PushEvent с SDL_KEYDOWN/UP
+
 static void PushKeyEvent(Uint32 type, SDL_Keycode keycode) {
     SDL_Event evt;
     SDL_memset(&evt, 0, sizeof(evt));
@@ -40,45 +46,134 @@ void TouchInput_HandleEvent(const SDL_Event& evt, int screenW, int screenH) {
     if (evt.type != SDL_FINGERDOWN && evt.type != SDL_FINGERUP && evt.type != SDL_FINGERMOTION)
         return;
 
-    float fx = evt.tfinger.x;
+    float fx = evt.tfinger.x;  // 0.0 - 1.0
     float fy = evt.tfinger.y;
     SDL_FingerID fid = evt.tfinger.fingerId;
 
-    for (int i = 0; i < NUM_ZONES; ++i) {
-        TouchZone& z = zones[i];
-        bool inside = (fx >= z.x && fx <= z.x + z.w && fy >= z.y && fy <= z.y + z.h);
+    // Абсолютные координаты для проверки углов (игра 320x240 логически)
+    float absx = fx * 320.0f;
+    float absy = fy * 240.0f;
 
-        if (evt.type == SDL_FINGERDOWN && inside && !z.active) {
-            z.active = true;
-            z.fingerId = fid;
-            PushKeyEvent(SDL_KEYDOWN, z.keycode);
+    if (evt.type == SDL_FINGERDOWN) {
+        // Углы: Enter и Escape (как в CE)
+        if (absx < 30 && absy < 30) {
+            // Верхний левый угол = ENTER
+            if (fakekeytimer > 0) {
+                PushKeyEvent(SDL_KEYUP, fakekey);
+            }
+            fakekey = SDLK_RETURN;
+            fakekeytimer = 6;
+            PushKeyEvent(SDL_KEYDOWN, SDLK_RETURN);
+            return;
         }
-        else if (evt.type == SDL_FINGERUP && z.active && z.fingerId == fid) {
-            z.active = false;
-            PushKeyEvent(SDL_KEYUP, z.keycode);
+        else if (absx > 290 && absy < 30) {
+            // Верхний правый угол = ESCAPE
+            if (fakekeytimer > 0) {
+                PushKeyEvent(SDL_KEYUP, fakekey);
+            }
+            fakekey = SDLK_ESCAPE;
+            fakekeytimer = 6;
+            PushKeyEvent(SDL_KEYDOWN, SDLK_ESCAPE);
+            return;
         }
-        else if (evt.type == SDL_FINGERMOTION && z.active && z.fingerId == fid && !inside) {
-            z.active = false;
-            PushKeyEvent(SDL_KEYUP, z.keycode);
+
+        // Основное управление
+        if (fx < 0.5f) {
+            // ЛЕВАЯ половина экрана
+            // Если уже идём вправо — это FLIP
+            // Иначе — LEFT
+            // (Проверяем через delayed_right_time как в CE)
+            bool going_right = (delayed_right_time > -3);
+
+            if (going_right) {
+                // Flip!
+                PushKeyEvent(SDL_KEYDOWN, SDLK_v);
+                finger_buttons[fid] = SDLK_v;
+                delayed_right_time = 0;
+            } else {
+                // Влево
+                PushKeyEvent(SDL_KEYDOWN, SDLK_LEFT);
+                finger_buttons[fid] = SDLK_LEFT;
+                delayed_left_time = 0;
+            }
+        } else {
+            // ПРАВАЯ половина экрана
+            // Если уже идём влево — это FLIP
+            // Иначе — RIGHT
+            bool going_left = (delayed_left_time > -3);
+
+            if (going_left) {
+                // Flip!
+                PushKeyEvent(SDL_KEYDOWN, SDLK_v);
+                finger_buttons[fid] = SDLK_v;
+                delayed_left_time = 0;
+            } else {
+                // Вправо
+                PushKeyEvent(SDL_KEYDOWN, SDLK_RIGHT);
+                finger_buttons[fid] = SDLK_RIGHT;
+                delayed_right_time = 0;
+            }
         }
+    }
+    else if (evt.type == SDL_FINGERUP) {
+        // Отпускаем кнопку
+        auto iter = finger_buttons.find(fid);
+        if (iter != finger_buttons.end()) {
+            PushKeyEvent(SDL_KEYUP, iter->second);
+
+            if (iter->second == SDLK_LEFT) {
+                delayed_left_time = -10;  // Задержка перед следующим нажатием
+            } else if (iter->second == SDLK_RIGHT) {
+                delayed_right_time = -10;
+            }
+
+            finger_buttons.erase(iter);
+        }
+
+        // Отпускаем fakekey
+        if (fakekeytimer > 0) {
+            PushKeyEvent(SDL_KEYUP, fakekey);
+            fakekeytimer = -1;
+        }
+    }
+    else if (evt.type == SDL_FINGERMOTION) {
+        // Для свайпа можно добавить логику, но в CE это holdinput
+        // Пока ничего не делаем при движении
     }
 }
 
 void TouchInput_Render(SDL_Renderer* renderer, int screenW, int screenH) {
-    for (int i = 0; i < NUM_ZONES; ++i) {
-        TouchZone& z = zones[i];
-        SDL_Rect rect;
-        rect.x = (int)(z.x * screenW);
-        rect.y = (int)(z.y * screenH);
-        rect.w = (int)(z.w * screenW);
-        rect.h = (int)(z.h * screenH);
+    // Полупрозрачные зоны (как в CE — невидимые, но для отладки можно включить)
+    // В CE зоны невидимые, но я добавлю лёгкую индикацию
 
-        Uint8 alpha = z.active ? 180 : 80;
-        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-        SDL_SetRenderDrawColor(renderer, z.r, z.g, z.b, alpha);
-        SDL_RenderFillRect(renderer, &rect);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
 
-        SDL_SetRenderDrawColor(renderer, z.r, z.g, z.b, 200);
-        SDL_RenderDrawRect(renderer, &rect);
-    }
+    // Левая зона (LEFT/RIGHT) — полупрозрачный синий
+    SDL_Rect leftZone = { 0, (int)(screenH * 0.3f), (int)(screenW * 0.5f), (int)(screenH * 0.7f) };
+    SDL_SetRenderDrawColor(renderer, 100, 150, 255, 30);
+    SDL_RenderFillRect(renderer, &leftZone);
+    SDL_SetRenderDrawColor(renderer, 100, 150, 255, 80);
+    SDL_RenderDrawRect(renderer, &leftZone);
+
+    // Правая зона (FLIP) — полупрозрачный оранжевый
+    SDL_Rect rightZone = { (int)(screenW * 0.5f), (int)(screenH * 0.3f), (int)(screenW * 0.5f), (int)(screenH * 0.7f) };
+    SDL_SetRenderDrawColor(renderer, 255, 150, 50, 30);
+    SDL_RenderFillRect(renderer, &rightZone);
+    SDL_SetRenderDrawColor(renderer, 255, 150, 50, 80);
+    SDL_RenderDrawRect(renderer, &rightZone);
+
+    // Угловые кнопки
+    // Enter (левый верх)
+    SDL_Rect enterBtn = { 10, 10, 60, 40 };
+    SDL_SetRenderDrawColor(renderer, 200, 255, 200, 60);
+    SDL_RenderFillRect(renderer, &enterBtn);
+    SDL_SetRenderDrawColor(renderer, 200, 255, 200, 120);
+    SDL_RenderDrawRect(renderer, &enterBtn);
+
+    // Escape (правый верх)
+    SDL_Rect escBtn = { screenW - 70, 10, 60, 40 };
+    SDL_SetRenderDrawColor(renderer, 255, 200, 200, 60);
+    SDL_RenderFillRect(renderer, &escBtn);
+    SDL_SetRenderDrawColor(renderer, 255, 200, 200, 120);
+    SDL_RenderDrawRect(renderer, &escBtn);
 }
