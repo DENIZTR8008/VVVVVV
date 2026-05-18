@@ -256,112 +256,96 @@ void KeyPoll::Poll()
 			}
 			break;
                 case SDL_FINGERDOWN:
-                    if (game.gamestate != EDITORMODE || was_ctrl_click) {
-                        auto absx = evt.tfinger.x * 320;
-                        auto absy = evt.tfinger.y * 240;
-                        if (absx < 30 && absy < 30) {
-                            if (fakekeytimer > 0) {
-                                keymap[fakekey] = 0;
-                            }
-                            fakekey = SDLK_RETURN;
-                            fakekeytimer = 6;
-                        } else if (absx > 290 && absy < 30) {
-                            if (fakekeytimer > 0) {
-                                keymap[fakekey] = 0;
-                            }
-                            fakekey = SDLK_ESCAPE;
-                            fakekeytimer = 6;
-                        } else if (type == holdinput) {
-                            if (evt.tfinger.x < 0.5) {
-                                if (keymap[SDLK_RIGHT] || delayed_right_time > -3) {
-                                    keymap[SDLK_v] = 1;
-                                    finger_buttons[evt.tfinger.fingerId] = SDLK_v;
-                                    if (delayed_right_time > -3) {
-                                        keymap[SDLK_RIGHT] = 0;
-                                    }
-                                    delayed_right_time = 0;
-                                } else {
-                                    delayed_left_time = 0;
-                                    finger_buttons[evt.tfinger.fingerId] = SDLK_LEFT;
+                {
+                    auto absx = evt.tfinger.x * 320;
+                    auto absy = evt.tfinger.y * 240;
+                    if (absx < 30 && absy < 30) {
+                        if (fakekeytimer > 0) {
+                            keymap[fakekey] = 0;
+                        }
+                        fakekey = SDLK_RETURN;
+                        fakekeytimer = 6;
+                    } else if (absx > 290 && absy < 30) {
+                        if (fakekeytimer > 0) {
+                            keymap[fakekey] = 0;
+                        }
+                        fakekey = SDLK_ESCAPE;
+                        fakekeytimer = 6;
+                    } else if (type == holdinput) {
+                        if (evt.tfinger.x < 0.5) {
+                            if (keymap[SDLK_RIGHT] || delayed_right_time > -3) {
+                                keymap[SDLK_v] = 1;
+                                finger_buttons[evt.tfinger.fingerId] = SDLK_v;
+                                if (delayed_right_time > -3) {
+                                    keymap[SDLK_RIGHT] = 0;
                                 }
+                                delayed_right_time = 0;
                             } else {
-                                if (keymap[SDLK_LEFT] || delayed_left_time > -3) {
-                                    keymap[SDLK_v] = 1;
-                                    finger_buttons[evt.tfinger.fingerId] = SDLK_v;
-                                    if (delayed_left_time > -3) {
-                                        keymap[SDLK_LEFT] = 0;
-                                    }
-                                    delayed_left_time = 0;
-                                } else {
-                                    delayed_right_time = 0;
-                                    finger_buttons[evt.tfinger.fingerId] = SDLK_RIGHT;
-                                }
-                            }
-                        } else if (type == swipeinput && evt.tfinger.x > 0.5) {
-                            keymap[SDLK_v] = 1;
-                            finger_buttons[evt.tfinger.fingerId] = SDLK_v;
-                        } else if (type == swipeinput) {
-                            orig_x = evt.tfinger.x;
-                        }
-
-                        break;
-                    }
-                    leftbutton = 1;
-                    realleftbutton = 1;
-                    mx = evt.tfinger.x * 320;
-                    my = evt.tfinger.y * 240;
-                    break;
-                case SDL_FINGERMOTION:
-                    if (game.gamestate != EDITORMODE) {
-                        if (type != swipeinput)
-                            break;
-
-                        bool flip = false;
-                        auto iter = finger_buttons.find(evt.tfinger.fingerId);
-                        if (iter != finger_buttons.end()) {
-                            if (iter->second == SDLK_v) flip = true;
-                        }
-                        if (!flip) {
-                            float dist = evt.tfinger.x - orig_x;
-                            if (dist < -0.05) orig_x = evt.tfinger.x + 0.01;
-                            else if (dist > 0.05) orig_x = evt.tfinger.x - 0.01;
-
-                            if (dist > 0) {
-                                keymap[SDLK_RIGHT] = 1;
-                                keymap[SDLK_LEFT] = 0;
-                                finger_buttons[evt.tfinger.fingerId] = SDLK_RIGHT;
-                            } else if (dist < 0) {
-                                keymap[SDLK_LEFT] = 1;
-                                keymap[SDLK_RIGHT] = 0;
+                                delayed_left_time = 0;
                                 finger_buttons[evt.tfinger.fingerId] = SDLK_LEFT;
                             }
-                        }
-
-                        break;
-                    }
-                    mx = evt.tfinger.x * 320;
-                    my = evt.tfinger.y * 240;
-                    break;
-                case SDL_FINGERUP:
-                    if (game.gamestate != EDITORMODE || was_ctrl_click) {
-                        auto iter = finger_buttons.find(evt.tfinger.fingerId);
-                        if (iter != finger_buttons.end()) {
-                            keymap[iter->second] = 0;
-                            if (iter->second == SDLK_LEFT) {
-                                delayed_left_time = -10;
-                            } else if (iter->second == SDLK_RIGHT) {
-                                delayed_right_time = -10;
+                        } else {
+                            if (keymap[SDLK_LEFT] || delayed_left_time > -3) {
+                                keymap[SDLK_v] = 1;
+                                finger_buttons[evt.tfinger.fingerId] = SDLK_v;
+                                if (delayed_left_time > -3) {
+                                    keymap[SDLK_LEFT] = 0;
+                                }
+                                delayed_left_time = 0;
+                            } else {
+                                delayed_right_time = 0;
+                                finger_buttons[evt.tfinger.fingerId] = SDLK_RIGHT;
                             }
-                            finger_buttons.erase(iter);
                         }
-
-                        break;
+                    } else if (type == swipeinput && evt.tfinger.x > 0.5) {
+                        keymap[SDLK_v] = 1;
+                        finger_buttons[evt.tfinger.fingerId] = SDLK_v;
+                    } else if (type == swipeinput) {
+                        orig_x = evt.tfinger.x;
                     }
-                    leftbutton = 0;
-                    realleftbutton = 0;
-                    mx = evt.tfinger.x * 320;
-                    my = evt.tfinger.y * 240;
                     break;
+                }
+                case SDL_FINGERMOTION:
+                {
+                    if (type != swipeinput)
+                        break;
+
+                    bool flip = false;
+                    auto iter = finger_buttons.find(evt.tfinger.fingerId);
+                    if (iter != finger_buttons.end()) {
+                        if (iter->second == SDLK_v) flip = true;
+                    }
+                    if (!flip) {
+                        float dist = evt.tfinger.x - orig_x;
+                        if (dist < -0.05) orig_x = evt.tfinger.x + 0.01;
+                        else if (dist > 0.05) orig_x = evt.tfinger.x - 0.01;
+
+                        if (dist > 0) {
+                            keymap[SDLK_RIGHT] = 1;
+                            keymap[SDLK_LEFT] = 0;
+                            finger_buttons[evt.tfinger.fingerId] = SDLK_RIGHT;
+                        } else if (dist < 0) {
+                            keymap[SDLK_LEFT] = 1;
+                            keymap[SDLK_RIGHT] = 0;
+                            finger_buttons[evt.tfinger.fingerId] = SDLK_LEFT;
+                        }
+                    }
+                    break;
+                }
+                case SDL_FINGERUP:
+                {
+                    auto iter = finger_buttons.find(evt.tfinger.fingerId);
+                    if (iter != finger_buttons.end()) {
+                        keymap[iter->second] = 0;
+                        if (iter->second == SDLK_LEFT) {
+                            delayed_left_time = -10;
+                        } else if (iter->second == SDLK_RIGHT) {
+                            delayed_right_time = -10;
+                        }
+                        finger_buttons.erase(iter);
+                    }
+                    break;
+                }
 
 		/* Controller Input */
 		case SDL_CONTROLLERBUTTONDOWN:

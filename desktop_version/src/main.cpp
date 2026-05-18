@@ -606,6 +606,11 @@ int main(int argc, char *argv[])
 
     SDL_SetHintWithPriority(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight", SDL_HINT_OVERRIDE);
 
+    /* Enable touch events on mobile - separate from mouse */
+    SDL_SetHintWithPriority(SDL_HINT_TOUCH_MOUSE_EVENTS, "0", SDL_HINT_OVERRIDE);
+    SDL_SetHintWithPriority(SDL_HINT_MOUSE_TOUCH_EVENTS, "0", SDL_HINT_OVERRIDE);
+    SDL_SetHintWithPriority(SDL_HINT_ANDROID_SEPARATE_MOUSE_AND_TOUCH, "1", SDL_HINT_OVERRIDE);
+
     if(!FILESYSTEM_init(argv[0], baseDir, assetsPath, langDir, fontsDir))
     {
         vlog_error("Unable to initialize filesystem!");
