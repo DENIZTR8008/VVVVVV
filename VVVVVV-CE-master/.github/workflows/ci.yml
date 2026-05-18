@@ -1,0 +1,219 @@
+name: CI
+
+# Trigger this workflow on push or pull request
+on: [push, pull_request]
+
+env:
+  SRC_DIR_PATH: desktop_version
+
+jobs:
+  build-lin:
+    name: Build (Ubuntu 18.04)
+
+    runs-on: ubuntu-18.04
+
+    env:
+      CXXFLAGS: -I/usr/local/include/SDL2
+      LDFLAGS: -L/usr/local/lib
+
+    steps:
+    - uses: actions/checkout@v1
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y apt-transport-https ca-certificates gnupg software-properties-common wget
+        wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | sudo apt-key add -
+        sudo apt-add-repository 'deb https://apt.kitware.com/ubuntu/ bionic main'
+        sudo apt-get update
+        sudo apt-get install -y cmake ninja-build libsdl2-dev libsdl2-mixer-dev gcc-8 g++-8 tree libfribidi-dev zip
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-7 700 --slave /usr/bin/g++ g++ /usr/bin/g++-7
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-8 800 --slave /usr/bin/g++ g++ /usr/bin/g++-8
+
+    - name: Build
+      run: cd ${SRC_DIR_PATH} && ./build.sh
+
+    - name: Cache data.zip
+      id: cache-data
+      uses: actions/cache@v1
+      with:
+        path: desktop_version/build/data-zip
+        key: data-zip-folder
+
+    - name: Download data.zip
+      run: cd ${SRC_DIR_PATH}/build && ../download-data.sh
+      if: steps.cache-data.outputs.cache-hit != 'true'
+
+    - name: Merge data.zip
+      run: cd ${SRC_DIR_PATH}/data && zip -r ../build/data-zip/data.zip graphics/
+
+    - name: CPack build
+      run: cd ${SRC_DIR_PATH} && ./cpack.sh
+
+    - name: Show build artifacts
+      run: tree ${SRC_DIR_PATH}/build
+
+    - name: Upload binary
+      uses: actions/upload-artifact@v1
+      with:
+        name: VVVVVV-CE-LinuxBinary
+        path: desktop_version/build/VVVVVV-CE
+
+    - name: Upload .deb
+      uses: actions/upload-artifact@v1
+      with:
+        name: VVVVVV-CE-LinuxDeb
+        path: desktop_version/build/VVVVVV-CE.deb
+
+  build-mac:
+    name: Build (macOS)
+
+    runs-on: macos-latest
+
+    env:
+      CXXFLAGS: -I/usr/local/include/SDL2
+      LDFLAGS: -L/usr/local/lib
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Install dependencies
+      run: brew install ninja sdl2 sdl2_mixer tree fribidi pkg-config
+
+    - name: CMake configure
+      run: |
+        mkdir ${SRC_DIR_PATH}/build && cd ${SRC_DIR_PATH}/build
+        cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -GNinja ..
+    - name: Build
+      run: ninja -C ${SRC_DIR_PATH}/build
+
+    - name: Checkout macdylibbundler
+      uses: actions/checkout@v2
+      with:
+        repository: SCG82/macdylibbundler
+        ref: bundle-frameworks
+        path: macdylibbundler
+
+    - name: Install macdylibbundler
+      run: |
+        cd macdylibbundler
+        make
+        sudo make install
+
+    - name: Build .app
+      run: |
+        mkdir -pv ${SRC_DIR_PATH}/build/VVVVVV-app/VVVVVV-CE.app/Contents/MacOS/
+        mkdir -pv ${SRC_DIR_PATH}/build/VVVVVV-app/VVVVVV-CE.app/Contents/Resources
+        mv -v ${SRC_DIR_PATH}/build/VVVVVV-CE ${SRC_DIR_PATH}/build/VVVVVV-app/VVVVVV-CE.app/Contents/MacOS/VVVVVV-CE
+        cp -v .github/resources/vce.icns ${SRC_DIR_PATH}/build/VVVVVV-app/VVVVVV-CE.app/Contents/Resources/vce.icns
+        cp -v .github/resources/Info.plist ${SRC_DIR_PATH}/build/VVVVVV-app/VVVVVV-CE.app/Contents/Info.plist
+
+    - name: Cache data.zip
+      uses: actions/cache@v1
+      with:
+        path: desktop_version/build/data-zip
+        key: data-zip-folder
+
+    - name: Copy data.zip
+      run: |
+        cd $SRC_DIR_PATH/build/
+        ../download-data.sh
+        cp -v data-zip/data.zip VVVVVV-app/VVVVVV-CE.app/Contents/Resources/data.zip
+
+    - name: Bundle .app
+      run: |
+        dylibbundler -cd -b -f -a ${SRC_DIR_PATH}/build/VVVVVV-app/VVVVVV-CE.app
+
+    - name: Tar .app
+      run: |
+        cd ${SRC_DIR_PATH}/build/VVVVVV-app
+        tar -czvf VVVVVV-CE.tgz VVVVVV-CE.app/
+
+    - name: Show build artifacts
+      run: tree ${SRC_DIR_PATH}/build
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v1
+      with:
+        name: ${{ format('VVVVVV-CE-{0}', runner.os) }}
+        path: desktop_version/build/VVVVVV-app/VVVVVV-CE.tgz
+
+  build-win:
+    name: Build (Ubuntu + MinGW64)
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v1
+
+    - name: Install Nix
+      uses: cachix/install-nix-action@v6
+
+    - name: Configure cachix
+      uses: cachix/cachix-action@v3
+      with:
+        name: v6cord
+        skipNixBuild: true
+
+    - name: Build
+      run: |
+        cd $SRC_DIR_PATH
+        mkdir -p build
+        nix-shell --arg cross true --run './build.sh'
+
+    - name: Copy artifacts
+      run: |
+        mkdir -p $SRC_DIR_PATH/build/VVVVVV-CE-Windows
+        cp -rv .github/libs/* $SRC_DIR_PATH/build/VVVVVV-CE.exe $SRC_DIR_PATH/build/VVVVVV-CE-Windows/
+
+    - name: Cache data.zip
+      uses: actions/cache@v1
+      with:
+        path: desktop_version/build/data-zip
+        key: data-zip-folder
+
+    - name: Copy data.zip
+      run: |
+        cd $SRC_DIR_PATH/build/
+        ../download-data.sh
+        (cd ../data && zip -r ../build/data-zip/data.zip graphics/)
+        cp -v data-zip/data.zip VVVVVV-CE-Windows/
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v1
+      with:
+        name: VVVVVV-CE-Windows
+        path: desktop_version/build/VVVVVV-CE-Windows
+
+  build-switch:
+    name: Build (Switch)
+
+    runs-on: ubuntu-18.04
+    container: leo60228/vvvvvv-ce-switch:2020-03-27
+
+    steps:
+    - uses: actions/checkout@v1
+
+    - name: Build
+      run: cd ${SRC_DIR_PATH} && ./build.sh
+
+    - name: Cache data.zip
+      uses: actions/cache@v1
+      with:
+        path: desktop_version/build/data-zip
+        key: data-zip-folder
+
+    - name: Prepare artifacts
+      run: |
+        cd $SRC_DIR_PATH/build/
+        ../download-data.sh
+        (cd ../data && zip -r ../build/data-zip/data.zip graphics/)
+        mkdir -pv VVVVVV-CE-Switch/switch/
+        mv -v data-zip/data.zip VVVVVV-CE-Switch/switch/
+        mv -v VVVVVV-CE.nro VVVVVV-CE-Switch/switch/
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v1
+      with:
+        name: VVVVVV-CE-Switch
+        path: desktop_version/build/VVVVVV-CE-Switch

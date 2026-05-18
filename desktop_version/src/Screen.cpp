@@ -282,13 +282,6 @@ void Screen::GetScreenSize(int* x, int* y)
 
 void Screen::RenderPresent(void)
 {
-
-#ifdef __ANDROID__
-    int touchW, touchH;
-    SDL_GetRendererOutputSize(m_renderer, &touchW, &touchH);
-    TouchInput_Render(m_renderer, touchW, touchH);
-#endif
-
     SDL_RenderPresent(m_renderer);
     graphics.clear();
 }

@@ -1,773 +1,631 @@
-#define KEY_DEFINITION
 #include "KeyPoll.h"
-
-#include <string.h>
-
-#include "Alloc.h"
-#include "ButtonGlyphs.h"
-#include "Constants.h"
-#include "Editor.h"
-#include "Exit.h"
-#include "Game.h"
-#include "GlitchrunnerMode.h"
+#include "Enums.h"
 #include "Graphics.h"
-#include "GraphicsUtil.h"
-#include "Localization.h"
-#include "LocalizationMaint.h"
-#include "LocalizationStorage.h"
 #include "Music.h"
-#include "Screen.h"
-#include "UTF8.h"
-#include "UtilityClass.h"
-#include "Vlogging.h"
+#include <stdio.h>
+#include <string.h>
+#include <utf8/checked.h>
+#ifdef __SWITCH__
+#include <switch.h>
+#endif
 
-// Touch controls for Android (embedded directly in KeyPoll)
-#include <map>
-
-static std::map<SDL_FingerID, SDL_Keycode> finger_buttons;
-static int delayed_left_time = -10;
-static int delayed_right_time = -10;
-static SDL_Keycode fakekey = SDLK_UNKNOWN;
-static int fakekeytimer = -1;
-
-static void ProcessTouchEvent(const SDL_Event& evt)
+void KeyPoll::setSensitivity(int _value)
 {
-    if (evt.type != SDL_FINGERDOWN && evt.type != SDL_FINGERUP && evt.type != SDL_FINGERMOTION)
-        return;
+	switch (_value)
+	{
+		case 0:
+			sensitivity = 28000;
+			break;
+		case 1:
+			sensitivity = 16000;
+			break;
+		case 2:
+			sensitivity = 8000;
+			break;
+		case 3:
+			sensitivity = 4000;
+			break;
+		case 4:
+			sensitivity = 2000;
+			break;
+	}
 
-    float fx = evt.tfinger.x;
-    float fy = evt.tfinger.y;
-    SDL_FingerID fid = evt.tfinger.fingerId;
+}
 
-    float absx = fx * 320.0f;
-    float absy = fy * 240.0f;
+KeyPoll::KeyPoll()
+{
+	xVel = 0;
+	yVel = 0;
+	setSensitivity(2);
 
-    if (evt.type == SDL_FINGERDOWN) {
-        // Углы: Enter и Escape
-        if (absx < 30 && absy < 30) {
+	quitProgram = 0;
+	textentrymode=false;
+	keybuffer="";
+	leftbutton=0; realleftbutton=0; rightbutton=0; middlebutton=0;
+	mx=0; my=0;
+	resetWindow = 0;
+	toggleFullscreen = false;
+	pressedbackspace=false;
+
+	useFullscreenSpaces = false;
+	if (strcmp(SDL_GetPlatform(), "Mac OS X") == 0)
+	{
+		useFullscreenSpaces = true;
+		const char *hint = SDL_GetHint(SDL_HINT_VIDEO_MAC_FULLSCREEN_SPACES);
+		if (hint != NULL)
+		{
+			useFullscreenSpaces = (strcmp(hint, "1") == 0);
+		}
+	}
+
+	linealreadyemptykludge = false;
+
+	pauseStart = 0;
+
+	/* Touch input init */
+	fakekey = SDLK_UNKNOWN;
+	fakekeytimer = -1;
+	finger_buttons.clear();
+	delayed_left_time = -1;
+	delayed_right_time = -1;
+	orig_x = 0.0f;
+	type = swipeinput;
+}
+
+void KeyPoll::enabletextentry()
+{
+	keybuffer="";
+	textentrymode = true;
+	SDL_StartTextInput();
+        wantsOSKClose = SDL_IsScreenKeyboardShown(graphics.screenbuffer->m_window);
+}
+
+void KeyPoll::disabletextentry()
+{
+	textentrymode = false;
+	SDL_StopTextInput();
+        wantsOSKClose = false;
+}
+
+static void ctrl_click(KeyPoll* key, SDL_Event* evt, bool* was) {
+    bool ctrl = key->keymap[SDLK_LCTRL] || key->keymap[SDLK_RCTRL] || key->isDown(SDL_CONTROLLER_BUTTON_LEFTSHOULDER);
+    bool left = key->realleftbutton;
+    if (evt) {
+        auto type = evt->type;
+        if (type == SDL_KEYDOWN || type == SDL_KEYUP) {
+            auto sym = evt->key.keysym.sym;
+            if (sym == SDLK_LCTRL || sym == SDLK_RCTRL) {
+                ctrl = type == SDL_KEYDOWN;
+            }
+        } else if (type == SDL_MOUSEBUTTONDOWN || type == SDL_MOUSEBUTTONUP) {
+            if (evt->button.button == SDL_BUTTON_LEFT) left = type == SDL_MOUSEBUTTONDOWN;
+        } else if (type == SDL_FINGERDOWN) {
+            left = true;
+        } else if (type == SDL_FINGERUP) {
+            left = false;
+        }
+    }
+    key->realleftbutton = left;
+    if (ctrl && left) {
+        key->rightbutton = true;
+        *was = true;
+    } else if (ctrl || left) {
+        key->rightbutton = false;
+        if (left) key->leftbutton = true;
+        *was = false;
+    }
+}
+
+void KeyPoll::Poll()
+{
+        if (fakekeytimer == 0) {
+            keymap[fakekey] = 0;
+            fakekeytimer = -1;
+        } else if (fakekeytimer > 0) {
+            keymap[fakekey] = 1;
+            --fakekeytimer;
+        } else if (fakekeytimer == -2) {
+            keymap[fakekey] = 1;
+        }
+
+        if (delayed_left_time == 0) {
+            delayed_left_time = -1;
+            keymap[SDLK_LEFT] = 1;
+        } else if (delayed_left_time > -10) {
+            --delayed_left_time;
+        }
+
+        if (delayed_right_time == 0) {
+            delayed_right_time = -1;
+            keymap[SDLK_RIGHT] = 1;
+        } else if (delayed_right_time > -10) {
+            --delayed_right_time;
+        }
+
+	SDL_Event evt;
+        bool was_ctrl_click = false;
+	while (SDL_PollEvent(&evt))
+	{
+                ctrl_click(this, &evt, &was_ctrl_click);
+		switch (evt.type)
+		{
+		/* Keyboard Input */
+		case SDL_KEYDOWN:
+		{
+			keymap[evt.key.keysym.sym] = true;
+
+			if (evt.key.keysym.sym == SDLK_BACKSPACE)
+			{
+				pressedbackspace = true;
+			}
+
+#ifdef __APPLE__ /* OSX prefers the command keys over the alt keys. -flibit */
+			bool altpressed = keymap[SDLK_LGUI] || keymap[SDLK_RGUI];
+#else
+			bool altpressed = keymap[SDLK_LALT] || keymap[SDLK_RALT];
+#endif
+			bool returnpressed = evt.key.keysym.sym == SDLK_RETURN;
+			bool fpressed = evt.key.keysym.sym == SDLK_f;
+			bool f11pressed = evt.key.keysym.sym == SDLK_F11 && game.gamestate != EDITORMODE;
+			if ((altpressed && (returnpressed || fpressed)) || f11pressed)
+			{
+				toggleFullscreen = true;
+			}
+
+			if (textentrymode)
+			{
+				if (evt.key.keysym.sym == SDLK_BACKSPACE && keybuffer.size() > 0)
+				{
+					bool kbemptybefore = keybuffer.empty();
+					std::string::iterator iter = keybuffer.end();
+					utf8::prior(iter, keybuffer.begin());
+					keybuffer = keybuffer.substr(0, iter - keybuffer.begin());
+					if (!kbemptybefore && keybuffer.empty())
+					{
+						linealreadyemptykludge = true;
+					}
+				}
+				else if (	evt.key.keysym.sym == SDLK_v &&
+						keymap[SDLK_LCTRL]	)
+				{
+					keybuffer += SDL_GetClipboardText();
+				}
+			}
+			break;
+		}
+		case SDL_KEYUP:
+			keymap[evt.key.keysym.sym] = false;
+			if (evt.key.keysym.sym == SDLK_BACKSPACE)
+			{
+				pressedbackspace = false;
+			}
+			break;
+		case SDL_TEXTINPUT:
+			keybuffer += evt.text.text;
+			break;
+
+		/* Mouse Input */
+		case SDL_MOUSEMOTION:
+			mx = evt.motion.x;
+			my = evt.motion.y;
+			break;
+		case SDL_MOUSEBUTTONDOWN:
+			if (was_ctrl_click)
+				break;
+			switch (evt.button.button)
+			{
+			case SDL_BUTTON_LEFT:
+				mx = evt.button.x;
+				my = evt.button.y;
+				leftbutton = 1;
+                                realleftbutton = 1;
+				break;
+			case SDL_BUTTON_RIGHT:
+				mx = evt.button.x;
+				my = evt.button.y;
+				rightbutton = 1;
+				break;
+			case SDL_BUTTON_MIDDLE:
+				mx = evt.button.x;
+				my = evt.button.y;
+				middlebutton = 1;
+				break;
+			}
+			break;
+		case SDL_MOUSEBUTTONUP:
+			if (was_ctrl_click)
+				break;
+			switch (evt.button.button)
+			{
+			case SDL_BUTTON_LEFT:
+				mx = evt.button.x;
+				my = evt.button.y;
+				leftbutton = 0;
+                                realleftbutton = 0;
+				break;
+			case SDL_BUTTON_RIGHT:
+				mx = evt.button.x;
+				my = evt.button.y;
+				rightbutton=0;
+				break;
+			case SDL_BUTTON_MIDDLE:
+				mx = evt.button.x;
+				my = evt.button.y;
+				middlebutton=0;
+				break;
+			}
+			break;
+                case SDL_FINGERDOWN:
+                    if (game.gamestate != EDITORMODE || was_ctrl_click) {
+                        auto absx = evt.tfinger.x * 320;
+                        auto absy = evt.tfinger.y * 240;
+                        if (absx < 30 && absy < 30) {
+                            if (fakekeytimer > 0) {
+                                keymap[fakekey] = 0;
+                            }
+                            fakekey = SDLK_RETURN;
+                            fakekeytimer = 6;
+                        } else if (absx > 290 && absy < 30) {
+                            if (fakekeytimer > 0) {
+                                keymap[fakekey] = 0;
+                            }
+                            fakekey = SDLK_ESCAPE;
+                            fakekeytimer = 6;
+                        } else if (type == holdinput) {
+                            if (evt.tfinger.x < 0.5) {
+                                if (keymap[SDLK_RIGHT] || delayed_right_time > -3) {
+                                    keymap[SDLK_v] = 1;
+                                    finger_buttons[evt.tfinger.fingerId] = SDLK_v;
+                                    if (delayed_right_time > -3) {
+                                        keymap[SDLK_RIGHT] = 0;
+                                    }
+                                    delayed_right_time = 0;
+                                } else {
+                                    delayed_left_time = 0;
+                                    finger_buttons[evt.tfinger.fingerId] = SDLK_LEFT;
+                                }
+                            } else {
+                                if (keymap[SDLK_LEFT] || delayed_left_time > -3) {
+                                    keymap[SDLK_v] = 1;
+                                    finger_buttons[evt.tfinger.fingerId] = SDLK_v;
+                                    if (delayed_left_time > -3) {
+                                        keymap[SDLK_LEFT] = 0;
+                                    }
+                                    delayed_left_time = 0;
+                                } else {
+                                    delayed_right_time = 0;
+                                    finger_buttons[evt.tfinger.fingerId] = SDLK_RIGHT;
+                                }
+                            }
+                        } else if (type == swipeinput && evt.tfinger.x > 0.5) {
+                            keymap[SDLK_v] = 1;
+                            finger_buttons[evt.tfinger.fingerId] = SDLK_v;
+                        } else if (type == swipeinput) {
+                            orig_x = evt.tfinger.x;
+                        }
+
+                        break;
+                    }
+                    leftbutton = 1;
+                    realleftbutton = 1;
+                    mx = evt.tfinger.x * 320;
+                    my = evt.tfinger.y * 240;
+                    break;
+                case SDL_FINGERMOTION:
+                    if (game.gamestate != EDITORMODE) {
+                        if (type != swipeinput)
+                            break;
+
+                        bool flip = false;
+                        auto iter = finger_buttons.find(evt.tfinger.fingerId);
+                        if (iter != finger_buttons.end()) {
+                            if (iter->second == SDLK_v) flip = true;
+                        }
+                        if (!flip) {
+                            float dist = evt.tfinger.x - orig_x;
+                            if (dist < -0.05) orig_x = evt.tfinger.x + 0.01;
+                            else if (dist > 0.05) orig_x = evt.tfinger.x - 0.01;
+
+                            if (dist > 0) {
+                                keymap[SDLK_RIGHT] = 1;
+                                keymap[SDLK_LEFT] = 0;
+                                finger_buttons[evt.tfinger.fingerId] = SDLK_RIGHT;
+                            } else if (dist < 0) {
+                                keymap[SDLK_LEFT] = 1;
+                                keymap[SDLK_RIGHT] = 0;
+                                finger_buttons[evt.tfinger.fingerId] = SDLK_LEFT;
+                            }
+                        }
+
+                        break;
+                    }
+                    mx = evt.tfinger.x * 320;
+                    my = evt.tfinger.y * 240;
+                    break;
+                case SDL_FINGERUP:
+                    if (game.gamestate != EDITORMODE || was_ctrl_click) {
+                        auto iter = finger_buttons.find(evt.tfinger.fingerId);
+                        if (iter != finger_buttons.end()) {
+                            keymap[iter->second] = 0;
+                            if (iter->second == SDLK_LEFT) {
+                                delayed_left_time = -10;
+                            } else if (iter->second == SDLK_RIGHT) {
+                                delayed_right_time = -10;
+                            }
+                            finger_buttons.erase(iter);
+                        }
+
+                        break;
+                    }
+                    leftbutton = 0;
+                    realleftbutton = 0;
+                    mx = evt.tfinger.x * 320;
+                    my = evt.tfinger.y * 240;
+                    break;
+
+		/* Controller Input */
+		case SDL_CONTROLLERBUTTONDOWN:
+			buttonmap[(SDL_GameControllerButton) evt.cbutton.button] = true;
+			break;
+		case SDL_CONTROLLERBUTTONUP:
+			buttonmap[(SDL_GameControllerButton) evt.cbutton.button] = false;
+			break;
+		case SDL_CONTROLLERAXISMOTION:
+			switch (evt.caxis.axis)
+			{
+			case SDL_CONTROLLER_AXIS_LEFTX:
+				if (	evt.caxis.value > -sensitivity &&
+					evt.caxis.value < sensitivity	)
+				{
+					xVel = 0;
+				}
+				else
+				{
+					xVel = (evt.caxis.value > 0) ? 1 : -1;
+				}
+				break;
+			case SDL_CONTROLLER_AXIS_LEFTY:
+				if (	evt.caxis.value > -sensitivity &&
+					evt.caxis.value < sensitivity	)
+				{
+					yVel = 0;
+				}
+				else
+				{
+					yVel = (evt.caxis.value > 0) ? 1 : -1;
+				}
+				break;
+			case SDL_CONTROLLER_AXIS_RIGHTX:
+				if (	evt.caxis.value > -sensitivity &&
+					evt.caxis.value < sensitivity	)
+				{
+					rxVel = 0;
+				}
+				else
+				{
+					rxVel = (evt.caxis.value > 0) ? 1 : -1;
+				}
+				break;
+			case SDL_CONTROLLER_AXIS_RIGHTY:
+				if (	evt.caxis.value > -sensitivity &&
+					evt.caxis.value < sensitivity	)
+				{
+					ryVel = 0;
+				}
+				else
+				{
+					ryVel = (evt.caxis.value > 0) ? 1 : -1;
+				}
+				break;
+			}
+			break;
+		case SDL_CONTROLLERDEVICEADDED:
+		{
+			SDL_GameController *toOpen = SDL_GameControllerOpen(evt.cdevice.which);
+			printf(
+				"Opened SDL_GameController ID #%i, %s\n",
+				evt.cdevice.which,
+				SDL_GameControllerName(toOpen)
+			);
+			controllers[SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(toOpen))] = toOpen;
+			break;
+		}
+		case SDL_CONTROLLERDEVICEREMOVED:
+		{
+			SDL_GameController *toClose = controllers[evt.cdevice.which];
+			controllers.erase(evt.cdevice.which);
+			printf("Closing %s\n", SDL_GameControllerName(toClose));
+			SDL_GameControllerClose(toClose);
+			break;
+		}
+
+		/* Window Events */
+		case SDL_WINDOWEVENT:
+			switch (evt.window.event)
+			{
+			/* Window Resize */
+			case SDL_WINDOWEVENT_RESIZED:
+				resetWindow = true;
+				break;
+
+			/* Window Focus */
+			case SDL_WINDOWEVENT_FOCUS_GAINED:
+				if (!game.disablepause)
+				{
+					isActive = true;
+				}
+				if (!useFullscreenSpaces)
+				{
+					if (wasFullscreen)
+					{
+						graphics.screenbuffer->isWindowed = false;
+						SDL_SetWindowFullscreen(
+							SDL_GetWindowFromID(evt.window.windowID),
+							SDL_WINDOW_FULLSCREEN_DESKTOP
+						);
+					}
+				}
+				SDL_DisableScreenSaver();
+				if (!game.disablepause && Mix_PlayingMusic())
+				{
+					// Correct songStart for how long we were paused
+					music.songStart += SDL_GetPerformanceCounter() - pauseStart;
+				}
+				break;
+			case SDL_WINDOWEVENT_FOCUS_LOST:
+				if (!game.disablepause)
+				{
+					isActive = false;
+				}
+				if (!useFullscreenSpaces)
+				{
+					wasFullscreen = !graphics.screenbuffer->isWindowed;
+					graphics.screenbuffer->isWindowed = true;
+					SDL_SetWindowFullscreen(
+						SDL_GetWindowFromID(evt.window.windowID),
+						0
+					);
+				}
+				SDL_EnableScreenSaver();
+				if (!game.disablepause)
+				{
+					pauseStart = SDL_GetPerformanceCounter();
+				}
+				break;
+
+			/* Mouse Focus */
+			case SDL_WINDOWEVENT_ENTER:
+				SDL_DisableScreenSaver();
+				break;
+			case SDL_WINDOWEVENT_LEAVE:
+				SDL_EnableScreenSaver();
+				break;
+			}
+			break;
+
+		/* Quit Event */
+		case SDL_QUIT:
+			quitProgram = true;
+			break;
+		}
+	}
+        if (textentrymode)
+        {
+#ifdef __SWITCH__
+            char buf[512] = {0};
+            SwkbdConfig conf;
+            swkbdCreate(&conf, 0);
+            swkbdConfigMakePresetDefault(&conf);
+            swkbdConfigSetInitialText(&conf, keybuffer.c_str());
+            swkbdShow(&conf, buf, sizeof(buf));
+            swkbdClose(&conf);
+            keybuffer = buf;
             if (fakekeytimer > 0) {
-                key.keymap[fakekey] = false;
+                keymap[fakekey] = 0;
             }
             fakekey = SDLK_RETURN;
             fakekeytimer = 6;
-            key.keymap[SDLK_RETURN] = true;
-            return;
-        }
-        else if (absx > 290 && absy < 30) {
-            if (fakekeytimer > 0) {
-                key.keymap[fakekey] = false;
-            }
-            fakekey = SDLK_ESCAPE;
-            fakekeytimer = 6;
-            key.keymap[SDLK_ESCAPE] = true;
-            return;
-        }
-
-        // Основное управление
-        if (fx < 0.5f) {
-            bool going_right = (delayed_right_time > -3);
-
-            if (going_right) {
-                key.keymap[SDLK_v] = true;
-                finger_buttons[fid] = SDLK_v;
-                delayed_right_time = 0;
-            } else {
-                key.keymap[SDLK_LEFT] = true;
-                finger_buttons[fid] = SDLK_LEFT;
-                delayed_left_time = 0;
-            }
-        } else {
-            bool going_left = (delayed_left_time > -3);
-
-            if (going_left) {
-                key.keymap[SDLK_v] = true;
-                finger_buttons[fid] = SDLK_v;
-                delayed_left_time = 0;
-            } else {
-                key.keymap[SDLK_RIGHT] = true;
-                finger_buttons[fid] = SDLK_RIGHT;
-                delayed_right_time = 0;
-            }
-        }
-    }
-    else if (evt.type == SDL_FINGERUP) {
-        auto iter = finger_buttons.find(fid);
-        if (iter != finger_buttons.end()) {
-            key.keymap[iter->second] = false;
-
-            if (iter->second == SDLK_LEFT) {
-                delayed_left_time = -10;
-            } else if (iter->second == SDLK_RIGHT) {
-                delayed_right_time = -10;
-            }
-
-            finger_buttons.erase(iter);
-        }
-
-        if (fakekeytimer > 0) {
-            key.keymap[fakekey] = false;
-            fakekeytimer = -1;
-        }
-    }
-}
-
-
-
-bool SaveScreenshot(void);
-
-int inline KeyPoll::getThreshold(void)
-{
-    switch (sensitivity)
-    {
-    case 0:
-        return 28000;
-    case 1:
-        return 16000;
-    case 2:
-        return 8000;
-    case 3:
-        return 4000;
-    case 4:
-        return 2000;
-    }
-
-    return 8000;
-
-}
-
-KeyPoll::KeyPoll(void)
-{
-    xVel = 0;
-    yVel = 0;
-    // 0..5
-    sensitivity = 2;
-
-    keybuffer = "";
-    imebuffer = "";
-    imebuffer_start = 0;
-    imebuffer_length = 0;
-    leftbutton=0; rightbutton=0; middlebutton=0;
-    mousex = 0;
-    mousey = 0;
-    resetWindow = 0;
-    pressedbackspace=false;
-
-    linealreadyemptykludge = false;
-
-    isActive = true;
-}
-
-void KeyPoll::enabletextentry(void)
-{
-    keybuffer = "";
-    imebuffer = "";
-    imebuffer_start = 0;
-    imebuffer_length = 0;
-    SDL_StartTextInput();
-}
-
-void KeyPoll::disabletextentry(void)
-{
-    SDL_StopTextInput();
-    imebuffer = "";
-    imebuffer_start = 0;
-    imebuffer_length = 0;
-}
-
-bool KeyPoll::textentry(void)
-{
-    return SDL_IsTextInputActive() == SDL_TRUE;
-}
-
-void KeyPoll::toggleFullscreen(void)
-{
-    gameScreen.toggleFullScreen();
-
-    keymap.clear(); /* we lost the input due to a new window. */
-    if (GlitchrunnerMode_less_than_or_equal(Glitchrunner2_2))
-    {
-        game.press_left = false;
-        game.press_right = false;
-        game.press_action = true;
-        game.press_map = false;
-    }
-}
-
-static int changemousestate(
-    int timeout,
-    const bool show,
-    const bool hide
-) {
-    int prev;
-    int new_;
-
-    if (timeout > 0)
-    {
-        return --timeout;
-    }
-
-    /* If we want to both show and hide at the same time, prioritize showing */
-    if (show)
-    {
-        new_ = SDL_ENABLE;
-    }
-    else if (hide)
-    {
-        new_ = SDL_DISABLE;
-    }
-    else
-    {
-        return timeout;
-    }
-
-    prev = SDL_ShowCursor(SDL_QUERY);
-
-    if (prev == new_)
-    {
-        return timeout;
-    }
-
-    SDL_ShowCursor(new_);
-
-    switch (new_)
-    {
-    case SDL_DISABLE:
-        timeout = 0;
-        break;
-    case SDL_ENABLE:
-        timeout = 30;
-        break;
-    }
-
-    return timeout;
-}
-
-/* Also used in Input.cpp. */
-void recomputetextboxes(void);
-
-bool cycle_language(bool should_recompute_textboxes)
-{
-    extern KeyPoll key;
-
-    if (game.gamestate == TITLEMODE
-    && game.currentmenuname == Menu::translator_options_cutscenetest)
-    {
-        /* Unfortunately, despite how it may appear to be working, the options
-         * are actually language-specific, and the order could be totally
-         * different between languages too. So we can't cycle in this menu. */
-        music.playef(Sound_CRY);
-        return should_recompute_textboxes;
-    }
-    if (game.translator_cutscene_test)
-    {
-        /* Refuse cycling here for similar reasons, even if it seems like it's
-         * working. The text boxes are based off of the language XML and
-         * could be completely different between languages. */
-        music.playef(Sound_CRY);
-        return should_recompute_textboxes;
-    }
-
-    int i = loc::languagelist_curlang;
-    if (key.keymap[SDLK_LSHIFT])
-    {
-        /* Backwards */
-        i--;
-    }
-    else
-    {
-        /* Forwards */
-        i++;
-    }
-    if (!loc::languagelist.empty())
-    {
-        i = POS_MOD(i, (int) loc::languagelist.size());
-
-        loc::languagelist_curlang = i;
-        loc::lang = loc::languagelist[i].code;
-        loc::loadtext(false);
-        graphics.grphx.init_translations();
-
-        should_recompute_textboxes = true;
-    }
-
-    if (game.gamestate == TITLEMODE
-    || (game.gamestate == EDITORMODE && ed.state == EditorState_MENU))
-    {
-        if (game.currentmenuname == Menu::translator_options_limitscheck)
-        {
-            loc::local_limits_check();
-        }
-
-        int temp = game.menucountdown;
-        game.createmenu(game.currentmenuname, true);
-        game.menucountdown = temp;
-
-        if (game.currentmenuname == Menu::language)
-        {
-            game.currentmenuoption = i;
-        }
-    }
-
-    return should_recompute_textboxes;
-}
-
-void KeyPoll::Poll(void)
-{
-    static int raw_mousex = 0;
-    static int raw_mousey = 0;
-    static int mousetoggletimeout = 0;
-    bool showmouse = false;
-    bool hidemouse = false;
-    bool altpressed = false;
-    bool fullscreenkeybind = false;
-    SDL_GameController *controller = NULL;
-    SDL_Event evt;
-    bool should_recompute_textboxes = false;
-    bool active_input_device_changed = false;
-    bool keyboard_was_active = BUTTONGLYPHS_keyboard_is_active();
-
-    // Initialize touch input on first call
-    static bool touchInit = false;
-    if (!touchInit)
-    {
-        TouchInput_Init();
-        touchInit = true;
-    }
-
-    while (SDL_PollEvent(&evt))
-    {
-        switch (evt.type)
-        {
-        /* Keyboard Input */
-        case SDL_KEYDOWN:
-        {
-            keymap[evt.key.keysym.sym] = true;
-
-            if (evt.key.keysym.sym == SDLK_BACKSPACE)
-            {
-                pressedbackspace = true;
-            }
-
-#ifdef __ANDROID__
-        TouchInput_HandleEvent(evt, 0, 0);
-#endif
-
-
-#ifdef __APPLE__ /* OSX prefers the command keys over the alt keys. -flibit */
-            altpressed = keymap[SDLK_LGUI] || keymap[SDLK_RGUI];
+            textentrymode = 0;
 #else
-            altpressed = keymap[SDLK_LALT] || keymap[SDLK_RALT];
+            //if (wantsOSKClose && !SDL_IsScreenKeyboardShown(graphics.screenbuffer->m_window)) {
+            if (SDL_HasScreenKeyboardSupport() && !SDL_IsScreenKeyboardShown(graphics.screenbuffer->m_window)) {
+                if (fakekeytimer > 0) {
+                    keymap[fakekey] = 0;
+                }
+                fakekey = SDLK_RETURN;
+                fakekeytimer = 6;
+                textentrymode = 0;
+            }
 #endif
-            bool returnpressed = evt.key.keysym.sym == SDLK_RETURN;
-            bool fpressed = evt.key.keysym.sym == SDLK_f;
-            bool f11pressed = evt.key.keysym.sym == SDLK_F11;
-            if ((altpressed && (returnpressed || fpressed)) || f11pressed)
-            {
-                fullscreenkeybind = true;
-            }
-
-            if (loc::show_translator_menu && evt.key.keysym.sym == SDLK_F8 && !evt.key.repeat)
-            {
-                if (keymap[SDLK_LCTRL])
-                {
-                    /* Debug keybind to cycle language. */
-                    should_recompute_textboxes = cycle_language(should_recompute_textboxes);
-                }
-                else
-                {
-                    /* Reload language files */
-                    loc::loadtext(false);
-                    graphics.grphx.init_translations();
-                    music.playef(Sound_COIN);
-                }
-            }
-
-            if (evt.key.keysym.sym == SDLK_F6 && !evt.key.repeat)
-            {
-                const bool success = SaveScreenshot();
-                game.old_screenshot_border_timer = 255;
-                game.screenshot_border_timer = 255;
-                game.screenshot_saved_success = success;
-            }
-
-            BUTTONGLYPHS_keyboard_set_active(true);
-
-            if (textentry())
-            {
-                if (evt.key.keysym.sym == SDLK_BACKSPACE && !keybuffer.empty())
-                {
-                    keybuffer.erase(UTF8_backspace(keybuffer.c_str(), keybuffer.length()));
-                    if (keybuffer.empty())
-                    {
-                        linealreadyemptykludge = true;
-                    }
-                }
-                else if (    evt.key.keysym.sym == SDLK_v &&
-                        keymap[SDLK_LCTRL]    )
-                {
-                    char* text = SDL_GetClipboardText();
-                    if (text != NULL)
-                    {
-                        keybuffer += text;
-                        VVV_free(text);
-                    }
-                }
-                else if (    evt.key.keysym.sym == SDLK_x &&
-                        keymap[SDLK_LCTRL]    )
-                {
-                    if (SDL_SetClipboardText(keybuffer.c_str()) == 0)
-                    {
-                        keybuffer = "";
-                    }
-                }
-            }
-            break;
         }
-        case SDL_KEYUP:
-            keymap[evt.key.keysym.sym] = false;
-            if (evt.key.keysym.sym == SDLK_BACKSPACE)
-            {
-                pressedbackspace = false;
-            }
-            break;
-        case SDL_TEXTINPUT:
-            if (!altpressed)
-            {
-                keybuffer += evt.text.text;
-            }
-            break;
-        case SDL_TEXTEDITING:
-            imebuffer = evt.edit.text;
-            imebuffer_start = evt.edit.start;
-            imebuffer_length = evt.edit.length;
-            break;
-        case SDL_TEXTEDITING_EXT:
-            imebuffer = evt.editExt.text;
-            imebuffer_start = evt.editExt.start;
-            imebuffer_length = evt.editExt.length;
-            SDL_free(evt.editExt.text);
-            break;
-
-        /* Mouse Input */
-        case SDL_MOUSEMOTION:
-            raw_mousex = evt.motion.x;
-            raw_mousey = evt.motion.y;
-            break;
-        case SDL_MOUSEBUTTONDOWN:
-            switch (evt.button.button)
-            {
-            case SDL_BUTTON_LEFT:
-                raw_mousex = evt.button.x;
-                raw_mousey = evt.button.y;
-                leftbutton = 1;
-                break;
-            case SDL_BUTTON_RIGHT:
-                raw_mousex = evt.button.x;
-                raw_mousey = evt.button.y;
-                rightbutton = 1;
-                break;
-            case SDL_BUTTON_MIDDLE:
-                raw_mousex = evt.button.x;
-                raw_mousey = evt.button.y;
-                middlebutton = 1;
-                break;
-            }
-            break;
-        case SDL_MOUSEBUTTONUP:
-            switch (evt.button.button)
-            {
-            case SDL_BUTTON_LEFT:
-                raw_mousex = evt.button.x;
-                raw_mousey = evt.button.y;
-                leftbutton=0;
-                break;
-            case SDL_BUTTON_RIGHT:
-                raw_mousex = evt.button.x;
-                raw_mousey = evt.button.y;
-                rightbutton=0;
-                break;
-            case SDL_BUTTON_MIDDLE:
-                raw_mousex = evt.button.x;
-                raw_mousey = evt.button.y;
-                middlebutton=0;
-                break;
-            }
-            break;
-
-        /* Controller Input */
-        case SDL_CONTROLLERBUTTONDOWN:
-            buttonmap[(SDL_GameControllerButton) evt.cbutton.button] = true;
-            BUTTONGLYPHS_keyboard_set_active(false);
-
-            controller = controllers[evt.cbutton.which];
-            BUTTONGLYPHS_update_layout(controller);
-            break;
-        case SDL_CONTROLLERBUTTONUP:
-            buttonmap[(SDL_GameControllerButton) evt.cbutton.button] = false;
-            break;
-        case SDL_CONTROLLERAXISMOTION:
-        {
-            const int threshold = getThreshold();
-            switch (evt.caxis.axis)
-            {
-            case SDL_CONTROLLER_AXIS_LEFTX:
-                if (    evt.caxis.value > -threshold &&
-                    evt.caxis.value < threshold    )
-                {
-                    xVel = 0;
-                }
-                else
-                {
-                    xVel = (evt.caxis.value > 0) ? 1 : -1;
-                }
-                break;
-            case SDL_CONTROLLER_AXIS_LEFTY:
-                if (    evt.caxis.value > -threshold &&
-                    evt.caxis.value < threshold    )
-                {
-                    yVel = 0;
-                }
-                else
-                {
-                    yVel = (evt.caxis.value > 0) ? 1 : -1;
-                }
-                break;
-            }
-            BUTTONGLYPHS_keyboard_set_active(false);
-
-            controller = controllers[evt.caxis.which];
-            BUTTONGLYPHS_update_layout(controller);
-            break;
-        }
-        case SDL_CONTROLLERDEVICEADDED:
-        {
-            controller = SDL_GameControllerOpen(evt.cdevice.which);
-            vlog_info(
-                "Opened SDL_GameController ID #%i, %s",
-                evt.cdevice.which,
-                SDL_GameControllerName(controller)
-            );
-            controllers[SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(controller))] = controller;
-            BUTTONGLYPHS_keyboard_set_active(false);
-            BUTTONGLYPHS_update_layout(controller);
-            break;
-        }
-        case SDL_CONTROLLERDEVICEREMOVED:
-        {
-            controller = controllers[evt.cdevice.which];
-            controllers.erase(evt.cdevice.which);
-            vlog_info("Closing %s", SDL_GameControllerName(controller));
-            SDL_GameControllerClose(controller);
-            if (controllers.empty())
-            {
-                BUTTONGLYPHS_keyboard_set_active(true);
-            }
-            break;
-        }
-
-        case SDL_RENDER_TARGETS_RESET:
-            gameScreen.recacheTextures();
-            break;
-
-        /* Window Events */
-        case SDL_WINDOWEVENT:
-            switch (evt.window.event)
-            {
-            /* Window Resize */
-            case SDL_WINDOWEVENT_RESIZED:
-                if (SDL_GetWindowFlags(
-                    SDL_GetWindowFromID(evt.window.windowID)
-                ) & SDL_WINDOW_INPUT_FOCUS)
-                {
-                    resetWindow = true;
-                }
-                break;
-
-            /* Window Focus */
-            case SDL_WINDOWEVENT_FOCUS_GAINED:
-                if (!game.disablepause)
-                {
-                    isActive = true;
-                    if ((!game.disableaudiopause || !game.disabletemporaryaudiopause) && music.currentsong != -1)
-                    {
-                        music.resume();
-                        music.resumeef();
-                    }
-                }
-                if (SDL_strcmp(SDL_GetCurrentVideoDriver(), "x11") == 0)
-                {
-                    if (wasFullscreen)
-                    {
-                        gameScreen.isWindowed = false;
-                        SDL_SetWindowFullscreen(
-                            SDL_GetWindowFromID(evt.window.windowID),
-                            SDL_WINDOW_FULLSCREEN_DESKTOP
-                        );
-                    }
-                }
-                SDL_DisableScreenSaver();
-                break;
-            case SDL_WINDOWEVENT_FOCUS_LOST:
-                if (!game.disablepause)
-                {
-                    isActive = false;
-                    if (!game.disableaudiopause || !game.disabletemporaryaudiopause)
-                    {
-                        music.pause();
-                        music.pauseef();
-                    }
-                }
-
-                if (SDL_strcmp(SDL_GetCurrentVideoDriver(), "x11") == 0)
-                {
-                    wasFullscreen = !gameScreen.isWindowed;
-                    gameScreen.isWindowed = true;
-                    SDL_SetWindowFullscreen(
-                        SDL_GetWindowFromID(evt.window.windowID),
-                        0
-                    );
-                }
-                SDL_EnableScreenSaver();
-                break;
-
-            /* Mouse Focus */
-            case SDL_WINDOWEVENT_ENTER:
-                SDL_DisableScreenSaver();
-                break;
-            case SDL_WINDOWEVENT_LEAVE:
-                SDL_EnableScreenSaver();
-                break;
-            }
-            break;
-
-        /* Quit Event */
-        case SDL_QUIT:
-            VVV_exit(0);
-            break;
-        }
-
-        switch (evt.type)
-        {
-        case SDL_KEYDOWN:
-            if (evt.key.repeat == 0)
-            {
-                hidemouse = true;
-            }
-            break;
-        case SDL_TEXTINPUT:
-        case SDL_CONTROLLERBUTTONDOWN:
-        case SDL_CONTROLLERAXISMOTION:
-            hidemouse = true;
-            break;
-        case SDL_MOUSEMOTION:
-        case SDL_MOUSEBUTTONDOWN:
-            showmouse = true;
-            break;
-        }
-
-#ifdef __ANDROID__
-        ProcessTouchEvent(evt);
-#endif
-    }
-
-    mousetoggletimeout = changemousestate(
-        mousetoggletimeout,
-        showmouse,
-        hidemouse
-    );
-
-    if (fullscreenkeybind)
-    {
-        toggleFullscreen();
-    }
-
-    SDL_Rect rect;
-    graphics.get_stretch_info(&rect);
-
-    int window_width;
-    int window_height;
-    SDL_GetWindowSizeInPixels(gameScreen.m_window, &window_width, &window_height);
-
-    int scaled_window_width;
-    int scaled_window_height;
-    SDL_GetWindowSize(gameScreen.m_window, &scaled_window_width, &scaled_window_height);
-
-    float scale_x = (float)window_width / (float)scaled_window_width;
-    float scale_y = (float)window_height / (float)scaled_window_height;
-
-    // Use screen stretch information to modify the coordinates (as we implement stretching manually)
-    mousex = ((raw_mousex * scale_x) - rect.x) * SCREEN_WIDTH_PIXELS / rect.w;
-    mousey = ((raw_mousey * scale_y) - rect.y) * SCREEN_HEIGHT_PIXELS / rect.h;
-
-    active_input_device_changed = keyboard_was_active != BUTTONGLYPHS_keyboard_is_active();
-    should_recompute_textboxes |= active_input_device_changed;
-    if (should_recompute_textboxes)
-    {
-        recomputetextboxes();
-    }
 }
 
 bool KeyPoll::isDown(SDL_Keycode key)
 {
-    return keymap[key];
+	return keymap[key];
+}
+
+bool KeyPoll::isUp(SDL_Keycode key)
+{
+	return !keymap[key];
 }
 
 bool KeyPoll::isDown(std::vector<SDL_GameControllerButton> buttons)
 {
-    for (size_t i = 0; i < buttons.size(); i += 1)
-    {
-        if (buttonmap[buttons[i]])
-        {
-            return true;
-        }
-    }
-    return false;
+	for (size_t i = 0; i < buttons.size(); i += 1)
+	{
+		if (buttonmap[buttons[i]])
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 bool KeyPoll::isDown(SDL_GameControllerButton button)
 {
-    return buttonmap[button];
+	return buttonmap[button];
 }
 
-bool KeyPoll::controllerButtonDown(void)
+bool KeyPoll::controllerButtonDown()
 {
-    for (
-        SDL_GameControllerButton button = SDL_CONTROLLER_BUTTON_A;
-        button < SDL_CONTROLLER_BUTTON_DPAD_UP;
-        button = (SDL_GameControllerButton) (button + 1)
-    ) {
-        if (isDown(button))
-        {
-            return true;
-        }
-    }
-    return false;
+	for (
+		SDL_GameControllerButton button = SDL_CONTROLLER_BUTTON_A;
+		button < SDL_CONTROLLER_BUTTON_DPAD_UP;
+		button = (SDL_GameControllerButton) (button + 1)
+	) {
+		if (isDown(button))
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 bool KeyPoll::controllerWantsLeft(bool includeVert)
 {
-    return (    buttonmap[SDL_CONTROLLER_BUTTON_DPAD_LEFT] ||
-            xVel < 0 ||
-            (    includeVert &&
-                (    buttonmap[SDL_CONTROLLER_BUTTON_DPAD_UP] ||
-                    yVel < 0    )    )    );
+	return (	buttonmap[SDL_CONTROLLER_BUTTON_DPAD_LEFT] ||
+			xVel < 0 ||
+			(	includeVert &&
+				(	buttonmap[SDL_CONTROLLER_BUTTON_DPAD_UP] ||
+					yVel < 0	)	)	);
 }
 
 bool KeyPoll::controllerWantsRight(bool includeVert)
 {
-    return (    buttonmap[SDL_CONTROLLER_BUTTON_DPAD_RIGHT] ||
-            xVel > 0 ||
-            (    includeVert &&
-                (    buttonmap[SDL_CONTROLLER_BUTTON_DPAD_DOWN] ||
-                    yVel > 0    )    )    );
+	return (	buttonmap[SDL_CONTROLLER_BUTTON_DPAD_RIGHT] ||
+			xVel > 0 ||
+			(	includeVert &&
+				(	buttonmap[SDL_CONTROLLER_BUTTON_DPAD_DOWN] ||
+					yVel > 0	)	)	);
 }
 
-bool KeyPoll::controllerWantsUp(void)
+bool KeyPoll::controllerWantsUp()
 {
-    return buttonmap[SDL_CONTROLLER_BUTTON_DPAD_UP] || yVel < 0;
+	return (buttonmap[SDL_CONTROLLER_BUTTON_DPAD_UP] || yVel < 0);
 }
 
-bool KeyPoll::controllerWantsDown(void)
+bool KeyPoll::controllerWantsDown()
 {
-    return buttonmap[SDL_CONTROLLER_BUTTON_DPAD_DOWN] || yVel > 0;
+	return (buttonmap[SDL_CONTROLLER_BUTTON_DPAD_DOWN] || yVel > 0);
+}
+
+bool KeyPoll::controllerWantsRLeft(bool includeVert)
+{
+	return (rxVel < 0 || (includeVert && ryVel < 0));
+}
+
+bool KeyPoll::controllerWantsRRight(bool includeVert)
+{
+	return (rxVel > 0 || (includeVert && ryVel > 0));
+}
+
+bool KeyPoll::controllerWantsRUp()
+{
+	return ryVel < 0;
+}
+
+bool KeyPoll::controllerWantsRDown()
+{
+	return ryVel > 0;
 }
