@@ -97,7 +97,6 @@ set(VVV_CXX_SRC
     src/IMERender.cpp
     src/Input.cpp
     src/KeyPoll.cpp
-    src/TouchInput.cpp
     src/Labclass.cpp
     src/LevelDebugger.cpp
     src/Localization.cpp

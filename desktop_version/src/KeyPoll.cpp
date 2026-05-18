@@ -20,7 +20,98 @@
 #include "UTF8.h"
 #include "UtilityClass.h"
 #include "Vlogging.h"
-#include "TouchInput.h"
+
+// Touch controls for Android (embedded directly in KeyPoll)
+#include <map>
+
+static std::map<SDL_FingerID, SDL_Keycode> finger_buttons;
+static int delayed_left_time = -10;
+static int delayed_right_time = -10;
+static SDL_Keycode fakekey = SDLK_UNKNOWN;
+static int fakekeytimer = -1;
+
+static void ProcessTouchEvent(const SDL_Event& evt)
+{
+    if (evt.type != SDL_FINGERDOWN && evt.type != SDL_FINGERUP && evt.type != SDL_FINGERMOTION)
+        return;
+
+    float fx = evt.tfinger.x;
+    float fy = evt.tfinger.y;
+    SDL_FingerID fid = evt.tfinger.fingerId;
+
+    float absx = fx * 320.0f;
+    float absy = fy * 240.0f;
+
+    if (evt.type == SDL_FINGERDOWN) {
+        // Углы: Enter и Escape
+        if (absx < 30 && absy < 30) {
+            if (fakekeytimer > 0) {
+                key.keymap[fakekey] = false;
+            }
+            fakekey = SDLK_RETURN;
+            fakekeytimer = 6;
+            key.keymap[SDLK_RETURN] = true;
+            return;
+        }
+        else if (absx > 290 && absy < 30) {
+            if (fakekeytimer > 0) {
+                key.keymap[fakekey] = false;
+            }
+            fakekey = SDLK_ESCAPE;
+            fakekeytimer = 6;
+            key.keymap[SDLK_ESCAPE] = true;
+            return;
+        }
+
+        // Основное управление
+        if (fx < 0.5f) {
+            bool going_right = (delayed_right_time > -3);
+
+            if (going_right) {
+                key.keymap[SDLK_v] = true;
+                finger_buttons[fid] = SDLK_v;
+                delayed_right_time = 0;
+            } else {
+                key.keymap[SDLK_LEFT] = true;
+                finger_buttons[fid] = SDLK_LEFT;
+                delayed_left_time = 0;
+            }
+        } else {
+            bool going_left = (delayed_left_time > -3);
+
+            if (going_left) {
+                key.keymap[SDLK_v] = true;
+                finger_buttons[fid] = SDLK_v;
+                delayed_left_time = 0;
+            } else {
+                key.keymap[SDLK_RIGHT] = true;
+                finger_buttons[fid] = SDLK_RIGHT;
+                delayed_right_time = 0;
+            }
+        }
+    }
+    else if (evt.type == SDL_FINGERUP) {
+        auto iter = finger_buttons.find(fid);
+        if (iter != finger_buttons.end()) {
+            key.keymap[iter->second] = false;
+
+            if (iter->second == SDLK_LEFT) {
+                delayed_left_time = -10;
+            } else if (iter->second == SDLK_RIGHT) {
+                delayed_right_time = -10;
+            }
+
+            finger_buttons.erase(iter);
+        }
+
+        if (fakekeytimer > 0) {
+            key.keymap[fakekey] = false;
+            fakekeytimer = -1;
+        }
+    }
+}
+
+
 
 bool SaveScreenshot(void);
 
@@ -573,6 +664,10 @@ void KeyPoll::Poll(void)
             showmouse = true;
             break;
         }
+
+#ifdef __ANDROID__
+        ProcessTouchEvent(evt);
+#endif
     }
 
     mousetoggletimeout = changemousestate(

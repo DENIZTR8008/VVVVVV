@@ -19,7 +19,6 @@
 #include "Map.h"
 #include "Render.h"
 #include "Vlogging.h"
-#include "TouchInput.h"
 
 void ScreenSettings_default(struct ScreenSettings* _this)
 {

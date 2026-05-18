@@ -1,17 +1,26 @@
-# VVVVVV Android Touch Controls v2 — Пропатченные файлы
+# VVVVVV Android Touch Controls — Integrated (FINAL)
 
-ИСПРАВЛЕНА ПРОБЛЕМА: теперь используется SDL_PushEvent вместо SDL_SendKeyboardKey.
-KeyPoll::Poll() корректно обрабатывает touch через стандартную SDL очередь событий.
+Теперь touch управление ВСТРОЕНО прямо в KeyPoll.cpp.
+Никаких отдельных модулей, всё в одном месте.
 
-## Быстрая установка
+## Как работает
 
-1. Распакуй ZIP поверх своего форка VVVVVV (с заменой файлов)
+- Переменные `finger_buttons`, `delayed_left_time`, `delayed_right_time`, `fakekey` — в начале KeyPoll.cpp
+- `ProcessTouchEvent()` — обрабатывает SDL_FINGERDOWN/UP прямо внутри `while(SDL_PollEvent)`
+- Прямое обновление `key.keymap[SDLK_*]` — без посредников
+- Рендер зон встроен в `Screen::RenderPresent()`
+
+## Управление (как в CE)
+
+| Зона | Действие |
+|------|----------|
+| Левая половина экрана | LEFT / RIGHT |
+| Правая половина экрана | FLIP (V) |
+| Верхний левый угол | ENTER |
+| Верхний правый угол | ESCAPE |
+
+## Установка
+
+1. Распакуй ZIP поверх форка (с заменой)
 2. GitHub Desktop → Commit → Push
-3. data.zip в desktop_version/VVVVVV-android/app/src/main/assets/
-4. Собери: ./gradlew assembleDebug
-
-## Кнопки
-- [ < ] влево (SDLK_LEFT)
-- [ > ] вправо (SDLK_RIGHT)
-- [FLIP] флип (SDLK_SPACE)
-- [MAP] карта (SDLK_m)
+3. Собери: ./gradlew assembleDebug
